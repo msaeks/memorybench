@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { createOpenAI } from "@ai-sdk/openai"
 import type {
   Provider,
   ProviderConfig,
@@ -10,51 +11,10 @@ import type {
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
+import { extractMemories } from "../../prompts/extraction"
 import { FILESYSTEM_PROMPTS } from "./prompts"
 
 const BASE_DIR = join(process.cwd(), "data", "providers", "filesystem")
-
-/**
- * Format a conversation session as a human-readable Markdown file.
- * Mirrors how Claude Code stores context in CLAUDE.md / MEMORY.md files.
- */
-function formatSessionAsMarkdown(session: UnifiedSession): string {
-  const lines: string[] = []
-  lines.push(`# Session: ${session.sessionId}`)
-  lines.push("")
-
-  if (session.metadata?.formattedDate) {
-    lines.push(`**Date:** ${session.metadata.formattedDate}`)
-  } else if (session.metadata?.date) {
-    lines.push(`**Date:** ${session.metadata.date}`)
-  }
-
-  if (session.metadata) {
-    const metaEntries = Object.entries(session.metadata).filter(
-      ([k]) => !["date", "formattedDate"].includes(k)
-    )
-    if (metaEntries.length > 0) {
-      for (const [key, value] of metaEntries) {
-        if (typeof value === "string" || typeof value === "number") {
-          lines.push(`**${key}:** ${value}`)
-        }
-      }
-    }
-  }
-
-  lines.push("")
-  lines.push("---")
-  lines.push("")
-
-  for (const msg of session.messages) {
-    const speaker = msg.speaker || msg.role
-    const timestamp = msg.timestamp ? ` [${msg.timestamp}]` : ""
-    lines.push(`**${speaker}** (${msg.role})${timestamp}: ${msg.content}`)
-    lines.push("")
-  }
-
-  return lines.join("\n")
-}
 
 /**
  * Simple tokenizer: lowercase, split on non-alphanumeric, filter short tokens.
@@ -106,43 +66,59 @@ function scoreDocument(queryTerms: string[], docText: string): { score: number; 
 /**
  * Filesystem Memory Provider
  *
- * Implements the Claude Code MEMORY.md / CLAUDE.md approach to memory:
- * - Stores conversations as plain Markdown files on the filesystem
- * - No embeddings, no vector database, no pre-processing
- * - Search is simple text matching across files
- * - The LLM reasons over raw conversation text
+ * Implements the Claude Code MEMORY.md approach to memory:
+ * - Extracts structured memories from conversations via LLM (like Claude's auto-memory)
+ * - Stores extracted memories as plain Markdown files on the filesystem
+ * - Search is simple text matching across memory files
+ * - The LLM reasons over curated, structured memory content (not raw transcripts)
  *
- * This represents the simplest possible memory approach: write to files, read from files.
- * Research from Letta shows this approach scores ~74% on LoCoMo, demonstrating that
- * LLMs can effectively reason over raw text without sophisticated retrieval.
+ * This represents the MEMORY.md approach: use an LLM to extract key facts, preferences,
+ * events, and relationships from conversations, then store them as searchable markdown.
  */
 export class FilesystemProvider implements Provider {
   name = "filesystem"
   prompts = FILESYSTEM_PROMPTS
   concurrency = {
     default: 50,
-    ingest: 100,
+    ingest: 10,
   }
 
-  async initialize(_config: ProviderConfig): Promise<void> {
+  private openai: ReturnType<typeof createOpenAI> | null = null
+
+  async initialize(config: ProviderConfig): Promise<void> {
+    if (!config.apiKey || config.apiKey === "none") {
+      throw new Error("Filesystem provider requires OPENAI_API_KEY for memory extraction")
+    }
+    this.openai = createOpenAI({ apiKey: config.apiKey })
     await mkdir(BASE_DIR, { recursive: true })
-    logger.info("Initialized Filesystem memory provider (CLAUDE.md-style)")
+    logger.info("Initialized Filesystem memory provider (MEMORY.md-style with LLM extraction)")
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
+    if (!this.openai) throw new Error("Provider not initialized")
+
     const containerDir = join(BASE_DIR, sanitizePath(options.containerTag))
-    const sessionsDir = join(containerDir, "sessions")
-    await mkdir(sessionsDir, { recursive: true })
+    const memoriesDir = join(containerDir, "memories")
+    await mkdir(memoriesDir, { recursive: true })
 
     const documentIds: string[] = []
 
     for (const session of sessions) {
-      const markdown = formatSessionAsMarkdown(session)
+      const extractedMemories = await extractMemories(this.openai, session)
+
+      // Build a memory file with date header + extracted content
+      const date =
+        (session.metadata?.formattedDate as string) ||
+        (session.metadata?.date as string) ||
+        "Unknown date"
+      const header = `# Memory: ${session.sessionId}\n**Date:** ${date}\n\n`
+      const content = header + extractedMemories
+
       const safeId = sanitizePath(session.sessionId)
-      const filePath = join(sessionsDir, `${safeId}.md`)
-      await writeFile(filePath, markdown, "utf-8")
+      const filePath = join(memoriesDir, `${safeId}.md`)
+      await writeFile(filePath, content, "utf-8")
       documentIds.push(safeId)
-      logger.debug(`Ingested session ${session.sessionId} as markdown`)
+      logger.debug(`Extracted and stored memories for session ${session.sessionId}`)
     }
 
     return { documentIds }
@@ -163,13 +139,13 @@ export class FilesystemProvider implements Provider {
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     const containerDir = join(BASE_DIR, sanitizePath(options.containerTag))
-    const sessionsDir = join(containerDir, "sessions")
+    const memoriesDir = join(containerDir, "memories")
 
     let files: string[]
     try {
-      files = await readdir(sessionsDir)
+      files = await readdir(memoriesDir)
     } catch {
-      logger.warn(`No sessions directory found for ${options.containerTag}`)
+      logger.warn(`No memories directory found for ${options.containerTag}`)
       return []
     }
 
@@ -186,7 +162,7 @@ export class FilesystemProvider implements Provider {
     }> = []
 
     for (const file of mdFiles) {
-      const content = await readFile(join(sessionsDir, file), "utf-8")
+      const content = await readFile(join(memoriesDir, file), "utf-8")
       const { score, matchCount } = scoreDocument(queryTerms, content)
       scored.push({
         sessionId: file.replace(".md", ""),

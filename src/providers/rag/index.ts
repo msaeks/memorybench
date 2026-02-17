@@ -13,11 +13,12 @@ import { logger } from "../../utils/logger"
 import { HybridSearchEngine } from "./search"
 import type { Chunk } from "./search"
 import { RAG_PROMPTS } from "./prompts"
+import { extractMemories } from "../../prompts/extraction"
 
 /** Target chunk size in characters (~400 tokens) */
 const CHUNK_SIZE = 1600
-/** Overlap between chunks in characters (~15%) */
-const CHUNK_OVERLAP = 240
+/** Overlap between chunks in characters (~80 tokens, matching OpenClaw) */
+const CHUNK_OVERLAP = 320
 /** Maximum chunks to embed in a single API call */
 const EMBEDDING_BATCH_SIZE = 100
 /** Embedding model to use */
@@ -27,7 +28,7 @@ const EMBEDDING_MODEL = "text-embedding-3-small"
 
 /**
  * Split text into overlapping chunks, attempting to break on sentence boundaries.
- * Follows the chunking approach from OpenClaw/QMD: ~400 tokens with 15% overlap.
+ * Follows the chunking approach from OpenClaw/QMD: ~400 tokens with overlap.
  */
 function chunkText(text: string, chunkSize: number = CHUNK_SIZE, overlap: number = CHUNK_OVERLAP): string[] {
   if (text.length <= chunkSize) {
@@ -66,27 +67,6 @@ function chunkText(text: string, chunkSize: number = CHUNK_SIZE, overlap: number
   return chunks.filter((c) => c.length > 0)
 }
 
-/**
- * Format a session into a text string suitable for chunking.
- */
-function sessionToText(session: UnifiedSession): string {
-  const lines: string[] = []
-
-  if (session.metadata?.formattedDate) {
-    lines.push(`Date: ${session.metadata.formattedDate}`)
-  } else if (session.metadata?.date) {
-    lines.push(`Date: ${session.metadata.date}`)
-  }
-
-  for (const msg of session.messages) {
-    const speaker = msg.speaker || msg.role
-    const timestamp = msg.timestamp ? ` [${msg.timestamp}]` : ""
-    lines.push(`${speaker}${timestamp}: ${msg.content}`)
-  }
-
-  return lines.join("\n")
-}
-
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 /**
@@ -95,15 +75,14 @@ function sessionToText(session: UnifiedSession): string {
  * Implements the hybrid BM25 + vector search approach used by OpenClaw's memory
  * system and QMD (Quick Markdown Search):
  *
- * - Ingestion: Chunks conversations into ~400-token pieces with 15% overlap,
+ * - Ingestion: Extracts structured memories via LLM (like OpenClaw's pre-compaction
+ *   flush), then chunks the extracted content into ~400-token pieces with overlap,
  *   generates embeddings via OpenAI text-embedding-3-small
  * - Search: Hybrid scoring combining BM25 keyword matching (30%) with
  *   vector cosine similarity (70%), following OpenClaw's formula
- * - No external memory service required - all local except for embedding API
- *
- * This represents a mid-complexity local RAG approach: more sophisticated than
- * pure file-based search (filesystem provider), but without the memory extraction
- * and knowledge graph features of cloud providers (Supermemory, Mem0, Zep).
+ * - Date-organized: Extracted memories include date context (like OpenClaw's
+ *   memory/YYYY-MM-DD.md daily logs)
+ * - No external memory service required - all local except for LLM + embedding API
  */
 export class RAGProvider implements Provider {
   name = "rag"
@@ -121,10 +100,10 @@ export class RAGProvider implements Provider {
   async initialize(config: ProviderConfig): Promise<void> {
     this.apiKey = config.apiKey
     if (!this.apiKey) {
-      throw new Error("RAG provider requires OPENAI_API_KEY for generating embeddings")
+      throw new Error("RAG provider requires OPENAI_API_KEY for memory extraction and embeddings")
     }
     this.openai = createOpenAI({ apiKey: this.apiKey })
-    logger.info("Initialized RAG memory provider (OpenClaw/QMD-style hybrid search)")
+    logger.info("Initialized RAG memory provider (OpenClaw/QMD-style with LLM extraction + hybrid search)")
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
@@ -134,20 +113,34 @@ export class RAGProvider implements Provider {
       text: string
       sessionId: string
       chunkIndex: number
+      date: string
       metadata?: Record<string, unknown>
     }> = []
 
-    // Chunk all sessions
+    // Step 1: Extract memories from each session via LLM, then chunk
     for (const session of sessions) {
-      const text = sessionToText(session)
-      const textChunks = chunkText(text)
+      const extracted = await extractMemories(this.openai, session)
+
+      // Extract ISO date for OpenClaw-style date organization
+      const isoDate = (session.metadata?.date as string) || "unknown"
+      const dateStr = isoDate !== "unknown" ? isoDate.split("T")[0] : "unknown"
+
+      // Prepend date context (like OpenClaw's memory/YYYY-MM-DD.md)
+      const dateHeader = `# Memories from ${dateStr}\n\n`
+      const content = dateHeader + extracted
+
+      const textChunks = chunkText(content)
 
       for (let i = 0; i < textChunks.length; i++) {
         allChunks.push({
           text: textChunks[i],
           sessionId: session.sessionId,
           chunkIndex: i,
-          metadata: session.metadata,
+          date: dateStr,
+          metadata: {
+            ...session.metadata,
+            memoryDate: dateStr,
+          },
         })
       }
     }
@@ -156,7 +149,7 @@ export class RAGProvider implements Provider {
       return { documentIds: [] }
     }
 
-    // Generate embeddings in batches
+    // Step 2: Generate embeddings in batches
     const embeddedChunks: Chunk[] = []
     const embeddingModel = this.openai.embedding(EMBEDDING_MODEL)
 
@@ -178,6 +171,7 @@ export class RAGProvider implements Provider {
           sessionId: chunk.sessionId,
           chunkIndex: chunk.chunkIndex,
           embedding: embeddings[j],
+          date: chunk.date,
           metadata: chunk.metadata,
         })
       }
@@ -187,12 +181,12 @@ export class RAGProvider implements Provider {
       )
     }
 
-    // Add to search engine
+    // Step 3: Add to search engine
     this.searchEngine.addChunks(options.containerTag, embeddedChunks)
 
     const documentIds = embeddedChunks.map((c) => c.id)
     logger.debug(
-      `Ingested ${sessions.length} session(s) as ${embeddedChunks.length} chunks for ${options.containerTag}`
+      `Ingested ${sessions.length} session(s) as ${embeddedChunks.length} extracted memory chunks for ${options.containerTag}`
     )
 
     return { documentIds }

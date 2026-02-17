@@ -27,7 +27,7 @@ export function getProviderConfig(provider: string): { apiKey: string; baseUrl?:
     case "zep":
       return { apiKey: config.zepApiKey }
     case "filesystem":
-      return { apiKey: "none" } // Filesystem provider needs no API key
+      return { apiKey: config.openaiApiKey } // Filesystem uses OpenAI for memory extraction
     case "rag":
       return { apiKey: config.openaiApiKey } // RAG provider uses OpenAI for embeddings
     default:

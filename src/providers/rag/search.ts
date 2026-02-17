@@ -17,6 +17,7 @@ export interface Chunk {
   sessionId: string
   chunkIndex: number
   embedding: number[]
+  date?: string
   metadata?: Record<string, unknown>
 }
 
@@ -27,6 +28,7 @@ export interface SearchResult {
   bm25Score: number
   sessionId: string
   chunkIndex: number
+  date?: string
   metadata?: Record<string, unknown>
 }
 
@@ -344,6 +346,7 @@ export class HybridSearchEngine {
         bm25Score: result.bm25Score,
         sessionId: chunk.sessionId,
         chunkIndex: chunk.chunkIndex,
+        date: chunk.date,
         metadata: chunk.metadata,
       }
     })

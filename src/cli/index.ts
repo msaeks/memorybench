@@ -70,12 +70,12 @@ Available providers for storing and retrieving memories:
                  Requires: ZEP_API_KEY
 
   filesystem     File-based memory (Claude MEMORY.md / CLAUDE.md style)
-                 Stores conversations as plain Markdown files, text-based search.
-                 No API key required. Local-only.
+                 Extracts structured memories via LLM, stores as Markdown files, text-based search.
+                 Requires: OPENAI_API_KEY (for memory extraction via gpt-4o-mini)
 
   rag            Hybrid RAG memory (OpenClaw/QMD style)
-                 Chunks + embeds conversations, hybrid BM25 + vector search.
-                 Requires: OPENAI_API_KEY (for embeddings via text-embedding-3-small)
+                 Extracts memories via LLM, chunks + embeds extracted content, hybrid BM25 + vector search.
+                 Requires: OPENAI_API_KEY (for memory extraction via gpt-4o-mini + embeddings)
 
 Usage:
   -p supermemory    Use Supermemory as the memory provider
