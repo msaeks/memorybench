@@ -9,6 +9,8 @@ import {
   getModels,
   startRun,
   getCompletedRuns,
+  expandQuestionIdPatterns,
+  getBenchmarkQuestions,
   type RunSummary,
   type PhaseId,
   PHASE_ORDER,
@@ -43,6 +45,7 @@ export default function NewRunPage() {
     sampleType: "consecutive" as SampleType,
     perCategory: "2",
     limit: "",
+    questionIds: "",
     concurrency: {
       default: undefined as number | undefined,
       ingest: undefined as number | undefined,
@@ -67,6 +70,14 @@ export default function NewRunPage() {
   const [showAdvancedConcurrencyNew, setShowAdvancedConcurrencyNew] = useState(false)
   const [showAdvancedConcurrencyAdvanced, setShowAdvancedConcurrencyAdvanced] = useState(false)
   const [editingPhase, setEditingPhase] = useState<string | null>(null)
+  const [validatingQuestionIds, setValidatingQuestionIds] = useState(false)
+  const [questionIdValidation, setQuestionIdValidation] = useState<{
+    valid: string[]
+    invalid: string[]
+    total: number
+    expanded: string[]
+    patternResults: Record<string, string[]>
+  } | null>(null)
   const runIdInputRef = useRef<HTMLInputElement>(null)
   const advancedRunIdInputRef = useRef<HTMLInputElement>(null)
   const concurrencyInputRef = useRef<HTMLInputElement>(null)
@@ -212,6 +223,70 @@ export default function NewRunPage() {
     }
   }
 
+  async function validateQuestionIds(
+    benchmark: string,
+    questionIdsInput: string
+  ): Promise<{
+    valid: string[]
+    invalid: string[]
+    total: number
+    expanded: string[]
+    patternResults: Record<string, string[]>
+  }> {
+    // Parse input: split by comma, trim, remove duplicates
+    const inputPatterns = questionIdsInput
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+    const uniquePatterns = [...new Set(inputPatterns)]
+
+    // Call pattern expansion endpoint
+    const expansionResult = await expandQuestionIdPatterns(benchmark, uniquePatterns)
+    const expandedIds = expansionResult.expandedIds
+
+    // Fetch all questions to validate expanded IDs exist
+    const allQuestionIds = new Set<string>()
+    let page = 1
+    let hasMore = true
+
+    while (hasMore) {
+      const response = await getBenchmarkQuestions(benchmark, {
+        page,
+        limit: 100,
+      })
+      response.questions.forEach((q) => allQuestionIds.add(q.questionId))
+      hasMore = page < response.pagination.totalPages
+      page++
+    }
+
+    // Validate expanded IDs
+    const valid: string[] = []
+    const invalid: string[] = []
+
+    expandedIds.forEach((id) => {
+      if (allQuestionIds.has(id)) {
+        valid.push(id)
+      } else {
+        invalid.push(id)
+      }
+    })
+
+    // Find patterns that didn't expand to anything
+    const patternsWithNoResults = uniquePatterns.filter(
+      (pattern) =>
+        !expansionResult.patternResults[pattern] ||
+        expansionResult.patternResults[pattern].length === 0
+    )
+
+    return {
+      valid,
+      invalid: [...invalid, ...patternsWithNoResults],
+      total: uniquePatterns.length,
+      expanded: expandedIds,
+      patternResults: expansionResult.patternResults,
+    }
+  }
+
   function generateRunId() {
     const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "")
     const random = Math.random().toString(36).slice(2, 6)
@@ -252,6 +327,7 @@ export default function NewRunPage() {
         : form.answeringModel
 
     let sampling: SamplingConfig | undefined
+    let questionIds: string[] | undefined
     if (activeTab === "new") {
       console.log("Form state:", {
         selectionMode: form.selectionMode,
@@ -272,6 +348,20 @@ export default function NewRunPage() {
           mode: "limit",
           limit: parseInt(form.limit),
         }
+      } else if (form.selectionMode === "questionIds") {
+        if (!form.questionIds.trim()) {
+          setError("Please enter at least one pattern or question ID")
+          return
+        }
+
+        // Require validation before submission (MANDATORY)
+        if (!questionIdValidation || questionIdValidation.invalid.length > 0) {
+          setError("Please validate patterns before starting the run")
+          return
+        }
+
+        // Use the expanded question IDs from validation
+        questionIds = questionIdValidation.expanded
       }
     }
     console.log("Submitting with sampling config:", sampling)
@@ -307,6 +397,7 @@ export default function NewRunPage() {
         judgeModel,
         answeringModel,
         sampling,
+        questionIds,
         concurrency,
         force: activeTab === "new",
         fromPhase,
@@ -871,14 +962,22 @@ export default function NewRunPage() {
                 Question Selection
               </label>
               <div className="flex gap-0 mb-4">
-                {(["full", "sample", "limit"] as SelectionMode[]).map((mode) => {
+                {(["full", "sample", "limit", "questionIds"] as SelectionMode[]).map((mode) => {
                   const isSelected = form.selectionMode === mode
-                  const labels = { full: "Full", sample: "Sample", limit: "Limit" }
+                  const labels = {
+                    full: "Full",
+                    sample: "Sample",
+                    limit: "Limit",
+                    questionIds: "IDs",
+                  }
                   return (
                     <button
                       key={mode}
                       type="button"
-                      onClick={() => setForm({ ...form, selectionMode: mode })}
+                      onClick={() => {
+                        setForm({ ...form, selectionMode: mode })
+                        setQuestionIdValidation(null)
+                      }}
                       className="px-3 py-1.5 text-sm font-medium transition-colors border-t border-b border-r first:border-l first:rounded-l last:rounded-r"
                       style={{
                         fontFamily: "'Space Grotesk', sans-serif",
@@ -939,6 +1038,104 @@ export default function NewRunPage() {
                     placeholder="e.g. 100"
                     min="1"
                   />
+                </div>
+              )}
+
+              {form.selectionMode === "questionIds" && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm text-text-secondary mb-2">
+                      Question IDs (comma-separated)
+                    </label>
+                    <textarea
+                      className="w-full px-3 py-2 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary placeholder-text-muted focus:outline-none focus:border-accent font-mono"
+                      rows={4}
+                      value={form.questionIds}
+                      onChange={(e) => {
+                        setForm({ ...form, questionIds: e.target.value })
+                        setQuestionIdValidation(null)
+                      }}
+                      placeholder="e.g., conv-30, conv-30-q0, conv-30-session_1"
+                    />
+                    <p className="text-xs text-text-muted mt-1">
+                      Enter question IDs, conversation IDs (e.g., conv-26), or session IDs (e.g.,
+                      conv-26-session_1), separated by commas
+                    </p>
+                  </div>
+
+                  {/* Validation Button */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!form.questionIds.trim()) {
+                        setError("Please enter at least one question ID")
+                        return
+                      }
+                      if (!form.benchmark) {
+                        setError("Please select a benchmark first")
+                        return
+                      }
+
+                      setValidatingQuestionIds(true)
+                      setError(null)
+                      try {
+                        const validation = await validateQuestionIds(
+                          form.benchmark,
+                          form.questionIds
+                        )
+                        setQuestionIdValidation(validation)
+
+                        if (validation.invalid.length > 0) {
+                          setError(`Invalid question IDs: ${validation.invalid.join(", ")}`)
+                        }
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : "Failed to validate question IDs")
+                      } finally {
+                        setValidatingQuestionIds(false)
+                      }
+                    }}
+                    disabled={validatingQuestionIds || !form.benchmark || !form.questionIds.trim()}
+                    className="px-3 py-1.5 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary hover:border-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {validatingQuestionIds ? (
+                      <>
+                        <div className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin mr-2" />
+                        Validating...
+                      </>
+                    ) : (
+                      "Validate Question IDs"
+                    )}
+                  </button>
+
+                  {/* Validation Result */}
+                  {questionIdValidation && (
+                    <div
+                      className={`p-3 rounded text-sm border ${
+                        questionIdValidation.invalid.length === 0
+                          ? "bg-green-500/10 border-green-500/20 text-green-400"
+                          : "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
+                      }`}
+                    >
+                      <div className="font-medium mb-1">
+                        {questionIdValidation.invalid.length === 0
+                          ? `✓ Valid: ${questionIdValidation.total} patterns expanded to ${questionIdValidation.expanded.length} questions`
+                          : `⚠ ${questionIdValidation.valid.length} valid, ${questionIdValidation.invalid.length} invalid patterns`}
+                      </div>
+                      {questionIdValidation.invalid.length > 0 && (
+                        <div className="text-xs mt-1">
+                          Invalid: {questionIdValidation.invalid.join(", ")}
+                        </div>
+                      )}
+                      {questionIdValidation.expanded.length > 0 && (
+                        <div className="text-xs mt-2 opacity-80">
+                          Sample expanded IDs:{" "}
+                          {questionIdValidation.expanded.slice(0, 5).join(", ")}
+                          {questionIdValidation.expanded.length > 5 &&
+                            ` ...and ${questionIdValidation.expanded.length - 5} more`}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -190,12 +190,14 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         answeringModel,
         limit,
         sampling,
+        questionIds,
         concurrency,
         force,
         fromPhase,
         sourceRunId,
       } = body
       console.log("[API] Extracted sampling:", sampling)
+      console.log("[API] Extracted questionIds:", questionIds)
       console.log("[API] Extracted concurrency:", concurrency)
 
       if (!provider || !benchmark || !runId || !judgeModel) {
@@ -279,6 +281,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         answeringModel,
         limit,
         sampling,
+        questionIds,
         concurrency,
         force: sourceRunId ? false : force,
         fromPhase: fromPhase as PhaseId | undefined,
@@ -374,6 +377,7 @@ async function runBenchmark(options: {
   answeringModel?: string
   limit?: number
   sampling?: SamplingConfig
+  questionIds?: string[]
   concurrency?: ConcurrencyConfig
   force?: boolean
   fromPhase?: PhaseId
@@ -396,6 +400,7 @@ async function runBenchmark(options: {
       answeringModel: options.answeringModel,
       limit: options.limit,
       sampling: options.sampling,
+      questionIds: options.questionIds,
       concurrency: options.concurrency,
       force: options.force,
       phases,

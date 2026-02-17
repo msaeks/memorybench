@@ -149,7 +149,7 @@ export const PHASE_ORDER: PhaseId[] = [
   "report",
 ]
 
-export type SelectionMode = "full" | "sample" | "limit"
+export type SelectionMode = "full" | "sample" | "limit" | "questionIds"
 export type SampleType = "consecutive" | "random"
 
 export interface SamplingConfig {
@@ -176,6 +176,7 @@ export async function startRun(params: {
   answeringModel?: string
   limit?: number
   sampling?: SamplingConfig
+  questionIds?: string[]
   concurrency?: ConcurrencyConfig
   force?: boolean
   fromPhase?: PhaseId
@@ -219,6 +220,16 @@ export async function getBenchmarkQuestions(
 
   const query = searchParams.toString()
   return fetchApi(`/api/benchmarks/${benchmark}/questions${query ? `?${query}` : ""}`)
+}
+
+export async function expandQuestionIdPatterns(
+  benchmark: string,
+  patterns: string[]
+): Promise<{ expandedIds: string[]; patternResults: Record<string, string[]> }> {
+  return fetchApi(`/api/benchmarks/${benchmark}/expand-ids`, {
+    method: "POST",
+    body: JSON.stringify({ patterns }),
+  })
 }
 
 export async function getModels(): Promise<{
@@ -445,6 +456,7 @@ export async function startCompare(params: {
   judgeModel: string
   answeringModel?: string
   sampling?: SamplingConfig
+  questionIds?: string[]
 }): Promise<{ message: string; compareId: string }> {
   return fetchApi("/api/compare/start", {
     method: "POST",

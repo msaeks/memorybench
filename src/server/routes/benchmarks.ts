@@ -128,6 +128,75 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
     }
   }
 
+  // POST /api/benchmarks/:name/expand-ids - Expand conversation/session patterns to question IDs
+  const expandIdsMatch = pathname.match(/^\/api\/benchmarks\/([^/]+)\/expand-ids$/)
+  if (method === "POST" && expandIdsMatch) {
+    const benchmarkName = expandIdsMatch[1]
+
+    try {
+      const body = await req.json()
+      const { patterns } = body as { patterns: string[] }
+
+      if (!patterns || !Array.isArray(patterns)) {
+        return json({ error: "patterns array is required" }, 400)
+      }
+
+      const benchmark = createBenchmark(benchmarkName as any)
+      await benchmark.load()
+      const allQuestions = benchmark.getQuestions()
+
+      const expandedIds = new Set<string>()
+      const patternResults: Record<string, string[]> = {}
+
+      for (const pattern of patterns) {
+        const trimmed = pattern.trim()
+        if (!trimmed) continue
+
+        const expanded: string[] = []
+
+        // Pattern 1: Conversation ID (e.g., "conv-26") - expand to all questions
+        // Check if pattern ends with a number and doesn't have -q or -session suffix
+        if (/^[a-zA-Z]+-\d+$/.test(trimmed)) {
+          const matchingQuestions = allQuestions.filter((q) =>
+            q.questionId.startsWith(trimmed + "-q")
+          )
+          matchingQuestions.forEach((q) => {
+            expanded.push(q.questionId)
+            expandedIds.add(q.questionId)
+          })
+        }
+        // Pattern 2: Session ID (e.g., "conv-26-session_1" or "001be529-session-0")
+        // Find all questions that reference this session
+        else if (trimmed.includes("-session")) {
+          const matchingQuestions = allQuestions.filter((q) =>
+            q.haystackSessionIds.includes(trimmed)
+          )
+          matchingQuestions.forEach((q) => {
+            expanded.push(q.questionId)
+            expandedIds.add(q.questionId)
+          })
+        }
+        // Pattern 3: Direct question ID - add as-is if it exists
+        else {
+          const exactMatch = allQuestions.find((q) => q.questionId === trimmed)
+          if (exactMatch) {
+            expanded.push(trimmed)
+            expandedIds.add(trimmed)
+          }
+        }
+
+        patternResults[pattern] = expanded
+      }
+
+      return json({
+        expandedIds: Array.from(expandedIds),
+        patternResults,
+      })
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : "Failed to expand IDs" }, 400)
+    }
+  }
+
   // GET /api/models - List available models
   if (method === "GET" && pathname === "/api/models") {
     const openai = listModelsByProvider("openai").map((alias) => ({

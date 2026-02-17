@@ -35,6 +35,7 @@ export interface CompareOptions {
   judgeModel: string
   answeringModel: string
   sampling?: SamplingConfig
+  questionIds?: string[]
   force?: boolean
 }
 
@@ -146,7 +147,7 @@ export class BatchManager {
   }
 
   async createManifest(options: CompareOptions): Promise<CompareManifest> {
-    const { providers, benchmark, judgeModel, answeringModel, sampling } = options
+    const { providers, benchmark, judgeModel, answeringModel, sampling, questionIds } = options
     const compareId = generateCompareId()
 
     logger.info(`Loading benchmark: ${benchmark}`)
@@ -155,7 +156,37 @@ export class BatchManager {
     const allQuestions = benchmarkInstance.getQuestions()
 
     let targetQuestionIds: string[]
-    if (sampling) {
+    if (questionIds && questionIds.length > 0) {
+      // Validate that all provided IDs exist in the benchmark
+      const allQuestionIdsSet = new Set(allQuestions.map((q) => q.questionId))
+      const validIds: string[] = []
+      const invalidIds: string[] = []
+
+      for (const id of questionIds) {
+        if (allQuestionIdsSet.has(id)) {
+          validIds.push(id)
+        } else {
+          invalidIds.push(id)
+        }
+      }
+
+      if (invalidIds.length > 0) {
+        logger.warn(`Invalid question IDs (will be skipped): ${invalidIds.join(", ")}`)
+      }
+
+      if (validIds.length === 0) {
+        throw new Error(
+          `All provided questionIds are invalid. No matching questions found in benchmark "${benchmark}". ` +
+            `Invalid IDs: ${invalidIds.join(", ")}`
+        )
+      }
+
+      targetQuestionIds = validIds
+      logger.info(
+        `Using explicit questionIds: ${validIds.length} valid questions` +
+          (invalidIds.length > 0 ? ` (${invalidIds.length} invalid skipped)` : "")
+      )
+    } else if (sampling) {
       targetQuestionIds = selectQuestionsBySampling(allQuestions, sampling)
     } else {
       targetQuestionIds = allQuestions.map((q) => q.questionId)
