@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { orchestrator } from "../../orchestrator"
@@ -10,10 +10,79 @@ import type { BenchmarkName } from "../../types/benchmark"
 import type { PhaseId, SamplingConfig } from "../../types/checkpoint"
 import type { ConcurrencyConfig } from "../../types/concurrency"
 import { getPhasesFromPhase, PHASE_ORDER } from "../../types/checkpoint"
+import { parseBoundedInt, isSafeId } from "../../utils/security"
+import { logger } from "../../utils/logger"
+import { z } from "zod"
+import { HttpBodyError, readJsonBody } from "../../utils/http"
 
 const checkpointManager = new CheckpointManager()
 
 const benchmarkRegistryCache: Record<string, any> = {}
+const PHASE_VALUES = ["ingest", "indexing", "search", "answer", "evaluate", "report"] as const
+
+const identifierSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .refine((value) => isSafeId(value), { message: "Must contain only letters, numbers, _ or -" })
+
+const samplingSchema = z
+  .object({
+    mode: z.enum(["full", "sample", "limit"]),
+    sampleType: z.enum(["consecutive", "random"]).optional(),
+    perCategory: z.number().int().min(1).max(1000).optional(),
+    limit: z.number().int().min(1).max(5000).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === "sample" && value.perCategory === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "sampling.perCategory is required when mode=sample",
+      })
+    }
+    if (value.mode === "limit" && value.limit === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "sampling.limit is required when mode=limit",
+      })
+    }
+  })
+
+const concurrencySchema = z
+  .object({
+    default: z.number().int().min(1).max(128).optional(),
+    ingest: z.number().int().min(1).max(128).optional(),
+    indexing: z.number().int().min(1).max(128).optional(),
+    search: z.number().int().min(1).max(128).optional(),
+    answer: z.number().int().min(1).max(128).optional(),
+    evaluate: z.number().int().min(1).max(128).optional(),
+  })
+  .strict()
+
+const startRunRequestSchema = z
+  .object({
+    provider: identifierSchema,
+    benchmark: identifierSchema,
+    runId: identifierSchema,
+    judgeModel: z.string().min(1).max(120),
+    answeringModel: z.string().min(1).max(120).optional(),
+    limit: z.number().int().min(1).max(5000).optional(),
+    sampling: samplingSchema.optional(),
+    concurrency: concurrencySchema.optional(),
+    force: z.boolean().optional(),
+    fromPhase: z.enum(PHASE_VALUES).optional(),
+    sourceRunId: identifierSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.sourceRunId && !value.fromPhase) {
+      ctx.addIssue({
+        code: "custom",
+        message: "fromPhase is required when sourceRunId is provided",
+      })
+    }
+  })
 
 function getQuestionTypeRegistry(benchmarkName: string) {
   if (!benchmarkRegistryCache[benchmarkName]) {
@@ -28,6 +97,17 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   })
+}
+
+function decodeAndValidateId(rawValue: string, fieldName: string): string | null {
+  try {
+    const value = decodeURIComponent(rawValue)
+    if (!isSafeId(value)) return null
+    return value
+  } catch {
+    logger.warn(`Rejected malformed ${fieldName} path value`)
+    return null
+  }
 }
 
 export async function handleRunsRoutes(req: Request, url: URL): Promise<Response | null> {
@@ -76,7 +156,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // GET /api/runs/:runId - Get checkpoint
   const runIdMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "GET" && runIdMatch) {
-    const runId = decodeURIComponent(runIdMatch[1])
+    const runId = decodeAndValidateId(runIdMatch[1], "runId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+
     const checkpoint = checkpointManager.load(runId)
     if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
@@ -92,7 +174,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // GET /api/runs/:runId/report - Get report
   const reportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/report$/)
   if (method === "GET" && reportMatch) {
-    const runId = decodeURIComponent(reportMatch[1])
+    const runId = decodeAndValidateId(reportMatch[1], "runId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+
     const reportPath = join(checkpointManager.getRunPath(runId), "report.json")
     if (!existsSync(reportPath)) {
       return json({ error: "Report not found" }, 404)
@@ -104,17 +188,27 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // GET /api/runs/:runId/questions - List questions
   const questionsMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions$/)
   if (method === "GET" && questionsMatch) {
-    const runId = decodeURIComponent(questionsMatch[1])
+    const runId = decodeAndValidateId(questionsMatch[1], "runId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+
     const checkpoint = checkpointManager.load(runId)
     if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
     }
 
     // Support pagination and filtering
-    const page = parseInt(url.searchParams.get("page") || "1")
-    const limit = parseInt(url.searchParams.get("limit") || "50")
+    const page = parseBoundedInt(url.searchParams.get("page"), 1, 1, 100000)
+    const limit = parseBoundedInt(url.searchParams.get("limit"), 50, 1, 200)
+    if (page === null || limit === null) {
+      return json({ error: "Invalid pagination parameters" }, 400)
+    }
+
     const status = url.searchParams.get("status") // completed, failed, pending
     const type = url.searchParams.get("type") // question type filter
+
+    if (status && !["completed", "failed", "pending"].includes(status)) {
+      return json({ error: "Invalid status filter" }, 400)
+    }
 
     let questions = Object.values(checkpoint.questions)
 
@@ -153,8 +247,11 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // GET /api/runs/:runId/questions/:questionId - Get question detail
   const questionDetailMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions\/([^/]+)$/)
   if (method === "GET" && questionDetailMatch) {
-    const runId = decodeURIComponent(questionDetailMatch[1])
-    const questionId = decodeURIComponent(questionDetailMatch[2])
+    const runId = decodeAndValidateId(questionDetailMatch[1], "runId")
+    const questionId = decodeAndValidateId(questionDetailMatch[2], "questionId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+    if (!questionId) return json({ error: "Invalid questionId" }, 400)
+
     const checkpoint = checkpointManager.load(runId)
     if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
@@ -180,8 +277,11 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // POST /api/runs/start - Start new run
   if (method === "POST" && pathname === "/api/runs/start") {
     try {
-      const body = await req.json()
-      console.log("[API] Start run request body:", JSON.stringify(body, null, 2))
+      const parsed = startRunRequestSchema.safeParse(await readJsonBody(req))
+      if (!parsed.success) {
+        return json({ error: "Invalid request body" }, 400)
+      }
+
       const {
         provider,
         benchmark,
@@ -194,26 +294,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         force,
         fromPhase,
         sourceRunId,
-      } = body
-      console.log("[API] Extracted sampling:", sampling)
-      console.log("[API] Extracted concurrency:", concurrency)
-
-      if (!provider || !benchmark || !runId || !judgeModel) {
-        return json(
-          {
-            error: "Missing required fields: provider, benchmark, runId, judgeModel",
-          },
-          400
-        )
-      }
+      } = parsed.data
 
       if (fromPhase && !PHASE_ORDER.includes(fromPhase)) {
-        return json(
-          {
-            error: `Invalid phase: ${fromPhase}. Valid phases: ${PHASE_ORDER.join(", ")}`,
-          },
-          400
-        )
+        return json({ error: `Invalid phase: ${fromPhase}` }, 400)
       }
 
       // Ingest is disabled in advanced mode (when using sourceRunId)
@@ -278,8 +362,8 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         judgeModel,
         answeringModel,
         limit,
-        sampling,
-        concurrency,
+        sampling: sampling as SamplingConfig | undefined,
+        concurrency: concurrency as ConcurrencyConfig | undefined,
         force: sourceRunId ? false : force,
         fromPhase: fromPhase as PhaseId | undefined,
       }).finally(() => {
@@ -288,14 +372,25 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       return json({ message: "Run started", runId })
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
+      if (e instanceof HttpBodyError) {
+        return json({ error: e.message }, e.status)
+      }
+
+      const isParseError = e instanceof SyntaxError
+      logger.error(`Failed to start run: ${e}`)
+      return json(
+        { error: isParseError ? "Invalid request body" : "Failed to start run" },
+        isParseError ? 400 : 500
+      )
     }
   }
 
   // POST /api/runs/:runId/stop - Stop running benchmark
   const stopMatch = pathname.match(/^\/api\/runs\/([^/]+)\/stop$/)
   if (method === "POST" && stopMatch) {
-    const runId = decodeURIComponent(stopMatch[1])
+    const runId = decodeAndValidateId(stopMatch[1], "runId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+
     if (!isRunActive(runId)) {
       return json({ error: "Run is not active" }, 404)
     }
@@ -306,7 +401,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   // DELETE /api/runs/:runId - Delete run
   const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "DELETE" && deleteMatch) {
-    const runId = decodeURIComponent(deleteMatch[1])
+    const runId = decodeAndValidateId(deleteMatch[1], "runId")
+    if (!runId) return json({ error: "Invalid runId" }, 400)
+
     if (isRunActive(runId)) {
       return json({ error: "Cannot delete active run" }, 409)
     }
@@ -408,6 +505,7 @@ async function runBenchmark(options: {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
     const wasStoppedByUser = message.includes("stopped by user")
+    logger.error(`Run ${options.runId} failed: ${error}`)
 
     // Update checkpoint status to persist the failure/stopped state
     const checkpoint = checkpointManager.load(options.runId)
@@ -418,7 +516,7 @@ async function runBenchmark(options: {
     wsManager.broadcast({
       type: wasStoppedByUser ? "run_stopped" : "error",
       runId: options.runId,
-      message,
+      message: wasStoppedByUser ? "Run stopped by user" : "Run failed",
     })
   }
 }

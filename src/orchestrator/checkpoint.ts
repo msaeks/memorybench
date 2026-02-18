@@ -21,6 +21,7 @@ import type {
 import type { ConcurrencyConfig } from "../types/concurrency"
 import { PHASE_ORDER } from "../types/checkpoint"
 import { logger } from "../utils/logger"
+import { assertSafeId, isSafeId, resolveSafeSubpath } from "../utils/security"
 
 const RUNS_DIR = "./data/runs"
 
@@ -33,7 +34,7 @@ export class CheckpointManager {
   }
 
   getRunPath(runId: string): string {
-    return join(this.basePath, runId)
+    return resolveSafeSubpath(this.basePath, runId, "runId")
   }
 
   getCheckpointPath(runId: string): string {
@@ -45,14 +46,17 @@ export class CheckpointManager {
   }
 
   exists(runId: string): boolean {
-    return existsSync(this.getCheckpointPath(runId))
+    try {
+      return existsSync(this.getCheckpointPath(runId))
+    } catch {
+      return false
+    }
   }
 
   load(runId: string): RunCheckpoint | null {
-    const path = this.getCheckpointPath(runId)
-    if (!existsSync(path)) return null
-
     try {
+      const path = this.getCheckpointPath(runId)
+      if (!existsSync(path)) return null
       const data = readFileSync(path, "utf8")
       return JSON.parse(data) as RunCheckpoint
     } catch (e) {
@@ -118,6 +122,8 @@ export class CheckpointManager {
       concurrency?: ConcurrencyConfig
     }
   ): RunCheckpoint {
+    assertSafeId(runId, "runId")
+
     const checkpoint: RunCheckpoint = {
       runId,
       dataSourceRunId: options?.dataSourceRunId || runId,
@@ -150,10 +156,14 @@ export class CheckpointManager {
   }
 
   delete(runId: string): void {
-    const runPath = this.getRunPath(runId)
-    if (existsSync(runPath)) {
-      rmSync(runPath, { recursive: true })
-      logger.info(`Deleted run: ${runPath}`)
+    try {
+      const runPath = this.getRunPath(runId)
+      if (existsSync(runPath)) {
+        rmSync(runPath, { recursive: true })
+        logger.info(`Deleted run: ${runPath}`)
+      }
+    } catch (e) {
+      logger.warn(`Refused to delete run with invalid id: ${runId} (${e})`)
     }
   }
 
@@ -167,6 +177,7 @@ export class CheckpointManager {
     return readdirSync(this.basePath, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
+      .filter((name) => isSafeId(name))
       .sort()
   }
 
@@ -290,6 +301,9 @@ export class CheckpointManager {
     fromPhase: PhaseId,
     overrides?: { judge?: string; answeringModel?: string }
   ): RunCheckpoint {
+    assertSafeId(sourceRunId, "sourceRunId")
+    assertSafeId(newRunId, "runId")
+
     const source = this.load(sourceRunId)
     if (!source) {
       throw new Error(`Source checkpoint not found: ${sourceRunId}`)

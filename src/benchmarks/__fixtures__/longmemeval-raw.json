@@ -1,0 +1,25 @@
+[
+  {
+    "question_id": "lme-1",
+    "question": "Where did I travel last month?",
+    "answer": "Kyoto",
+    "question_type": "temporal-reasoning",
+    "question_date": "2026-02-10",
+    "haystack_dates": ["2026/01/15 (Wed) 14:30"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I traveled to Kyoto last month.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "That sounds great.",
+          "has_answer": false
+        }
+      ]
+    ]
+  }
+]
+

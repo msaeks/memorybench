@@ -1,4 +1,8 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"
+const READ_API_KEY =
+  process.env.NEXT_PUBLIC_MEMORYBENCH_READ_API_KEY || process.env.NEXT_PUBLIC_MEMORYBENCH_API_KEY
+const WRITE_API_KEY =
+  process.env.NEXT_PUBLIC_MEMORYBENCH_WRITE_API_KEY || process.env.NEXT_PUBLIC_MEMORYBENCH_API_KEY
 
 export interface RunSummary {
   runId: string
@@ -78,10 +82,15 @@ export interface PaginatedResponse<T> {
 
 // Fetch wrapper with error handling
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase()
+  const isMutating = !["GET", "HEAD", "OPTIONS"].includes(method)
+  const token = isMutating ? WRITE_API_KEY || READ_API_KEY : READ_API_KEY || WRITE_API_KEY
+
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   })

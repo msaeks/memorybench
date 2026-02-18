@@ -1,0 +1,53 @@
+[
+  {
+    "category": "user_evidence",
+    "item": {
+      "question": "What city do I live in?",
+      "answer": "Seattle",
+      "message_evidences": [
+        {
+          "speaker": "user",
+          "text": "I live in Seattle."
+        }
+      ],
+      "conversations": [
+        {
+          "messages": [
+            {
+              "speaker": "user",
+              "text": "I live in Seattle."
+            },
+            {
+              "speaker": "assistant",
+              "text": "Thanks for sharing."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "category": "preference_evidence",
+    "item": {
+      "question": "What drink do I prefer?",
+      "answer": "Tea",
+      "message_evidences": [
+        {
+          "speaker": "user",
+          "text": "I prefer tea over coffee."
+        }
+      ],
+      "conversations": [
+        {
+          "messages": [
+            {
+              "speaker": "user",
+              "text": "I prefer tea over coffee."
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+

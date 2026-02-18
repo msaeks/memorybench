@@ -1,0 +1,48 @@
+[
+  {
+    "sample_id": "locomo-1",
+    "qa": [
+      {
+        "question": "Where does Alice live?",
+        "answer": "Seattle",
+        "evidence": ["session_1"],
+        "category": 1
+      },
+      {
+        "question": "What was planned for next week?",
+        "answer": "Hiking",
+        "evidence": ["session_2"],
+        "category": 3
+      }
+    ],
+    "conversation": {
+      "speaker_a": "Alice",
+      "speaker_b": "Bob",
+      "session_1": [
+        {
+          "speaker": "Alice",
+          "dia_id": "1",
+          "text": "I moved to Seattle."
+        },
+        {
+          "speaker": "Bob",
+          "dia_id": "2",
+          "text": "Nice city!"
+        }
+      ],
+      "session_1_date_time": "9:30 am on 5 March, 2024",
+      "session_2": [
+        {
+          "speaker": "Alice",
+          "dia_id": "3",
+          "text": "Let's go hiking next week."
+        }
+      ],
+      "session_2_date_time": "12:15 pm on 6 March, 2024"
+    },
+    "event_summary": {},
+    "observation": {},
+    "session_summary": {}
+  }
+]
+

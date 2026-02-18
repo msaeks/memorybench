@@ -8,6 +8,7 @@ import { logger } from "../utils/logger"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { join } from "path"
 import { startRun, endRun } from "../server/runState"
+import { assertSafeId, resolveSafeSubpath } from "../utils/security"
 
 const checkpointManager = new CheckpointManager()
 
@@ -84,7 +85,7 @@ function selectQuestionsBySampling(
 
 export class BatchManager {
   private getComparePath(compareId: string): string {
-    return join(COMPARE_DIR, compareId)
+    return resolveSafeSubpath(COMPARE_DIR, compareId, "compareId")
   }
 
   private getManifestPath(compareId: string): string {
@@ -96,6 +97,8 @@ export class BatchManager {
   }
 
   saveManifest(manifest: CompareManifest): void {
+    assertSafeId(manifest.compareId, "compareId")
+
     const comparePath = this.getComparePath(manifest.compareId)
     if (!existsSync(comparePath)) {
       mkdirSync(comparePath, { recursive: true })
@@ -105,9 +108,9 @@ export class BatchManager {
   }
 
   loadManifest(compareId: string): CompareManifest | null {
-    const path = this.getManifestPath(compareId)
-    if (!existsSync(path)) return null
     try {
+      const path = this.getManifestPath(compareId)
+      if (!existsSync(path)) return null
       return JSON.parse(readFileSync(path, "utf8")) as CompareManifest
     } catch {
       return null
@@ -115,25 +118,34 @@ export class BatchManager {
   }
 
   delete(compareId: string): void {
-    const comparePath = this.getComparePath(compareId)
-    if (existsSync(comparePath)) {
-      rmSync(comparePath, { recursive: true })
-    }
-    const manifest = this.loadManifest(compareId)
-    if (manifest) {
-      for (const run of manifest.runs) {
-        const runPath = join(RUNS_DIR, run.runId)
-        if (existsSync(runPath)) {
-          rmSync(runPath, { recursive: true })
+    try {
+      const manifest = this.loadManifest(compareId)
+      const comparePath = this.getComparePath(compareId)
+      if (existsSync(comparePath)) {
+        rmSync(comparePath, { recursive: true })
+      }
+      if (manifest) {
+        for (const run of manifest.runs) {
+          try {
+            const runPath = resolveSafeSubpath(RUNS_DIR, run.runId, "runId")
+            if (existsSync(runPath)) {
+              rmSync(runPath, { recursive: true })
+            }
+          } catch (e) {
+            logger.warn(`Skipped deleting run with invalid id: ${run.runId} (${e})`)
+          }
         }
       }
+    } catch (e) {
+      logger.warn(`Skipped deleting comparison with invalid id: ${compareId} (${e})`)
     }
   }
 
   loadReport(runId: string): BenchmarkResult | null {
-    const reportPath = join(RUNS_DIR, runId, "report.json")
-    if (!existsSync(reportPath)) return null
     try {
+      const runPath = resolveSafeSubpath(RUNS_DIR, runId, "runId")
+      const reportPath = join(runPath, "report.json")
+      if (!existsSync(reportPath)) return null
       return JSON.parse(readFileSync(reportPath, "utf8")) as BenchmarkResult
     } catch {
       return null

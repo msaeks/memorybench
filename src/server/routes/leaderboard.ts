@@ -5,10 +5,27 @@ import { db, schema } from "../db"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { createBenchmark } from "../../benchmarks"
 import type { BenchmarkName } from "../../types/benchmark"
+import { isSafeId } from "../../utils/security"
+import { z } from "zod"
+import { logger } from "../../utils/logger"
+import { HttpBodyError, readJsonBody } from "../../utils/http"
 
 const checkpointManager = new CheckpointManager()
 
 const benchmarkRegistryCache: Record<string, any> = {}
+const addLeaderboardRequestSchema = z
+  .object({
+    runId: z
+      .string()
+      .min(1)
+      .max(80)
+      .refine((value) => isSafeId(value), {
+        message: "runId must contain only letters, numbers, _ or -",
+      }),
+    notes: z.string().max(2000).optional(),
+    version: z.string().trim().min(1).max(64).optional(),
+  })
+  .strict()
 
 function getQuestionTypeRegistry(benchmarkName: string) {
   if (!benchmarkRegistryCache[benchmarkName]) {
@@ -23,6 +40,12 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   })
+}
+
+function parseEntryId(rawValue: string): number | null {
+  const parsed = Number.parseInt(rawValue, 10)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null
+  return parsed
 }
 
 export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<Response | null> {
@@ -78,19 +101,19 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
 
       return json({ entries: parsed })
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : "Failed to load leaderboard" }, 500)
+      logger.error(`Failed to load leaderboard entries: ${e}`)
+      return json({ error: "Failed to load leaderboard" }, 500)
     }
   }
 
   // POST /api/leaderboard - Add run to leaderboard
   if (method === "POST" && pathname === "/api/leaderboard") {
     try {
-      const body = await req.json()
-      const { runId, notes, version } = body
-
-      if (!runId) {
-        return json({ error: "runId is required" }, 400)
+      const parsed = addLeaderboardRequestSchema.safeParse(await readJsonBody(req))
+      if (!parsed.success) {
+        return json({ error: "Invalid request body" }, 400)
       }
+      const { runId, notes, version } = parsed.data
 
       // Use provided version or default to "baseline"
       const entryVersion = version?.trim() || "baseline"
@@ -217,7 +240,11 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
         },
       })
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : "Failed to add to leaderboard" }, 500)
+      if (e instanceof HttpBodyError) {
+        return json({ error: e.message }, e.status)
+      }
+      logger.error(`Failed to add leaderboard entry: ${e}`)
+      return json({ error: "Failed to add to leaderboard" }, 500)
     }
   }
 
@@ -225,7 +252,10 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
   const deleteMatch = pathname.match(/^\/api\/leaderboard\/(\d+)$/)
   if (method === "DELETE" && deleteMatch) {
     try {
-      const id = parseInt(deleteMatch[1])
+      const id = parseEntryId(deleteMatch[1])
+      if (id === null) {
+        return json({ error: "Invalid leaderboard entry id" }, 400)
+      }
 
       const entry = db
         .select()
@@ -241,10 +271,8 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
 
       return json({ message: "Removed from leaderboard", id })
     } catch (e) {
-      return json(
-        { error: e instanceof Error ? e.message : "Failed to remove from leaderboard" },
-        500
-      )
+      logger.error(`Failed to remove leaderboard entry: ${e}`)
+      return json({ error: "Failed to remove from leaderboard" }, 500)
     }
   }
 
@@ -252,7 +280,10 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
   const getMatch = pathname.match(/^\/api\/leaderboard\/(\d+)$/)
   if (method === "GET" && getMatch) {
     try {
-      const id = parseInt(getMatch[1])
+      const id = parseEntryId(getMatch[1])
+      if (id === null) {
+        return json({ error: "Invalid leaderboard entry id" }, 400)
+      }
 
       const entry = db
         .select()
@@ -302,7 +333,8 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
         promptsUsed,
       })
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : "Failed to get entry" }, 500)
+      logger.error(`Failed to get leaderboard entry: ${e}`)
+      return json({ error: "Failed to get entry" }, 500)
     }
   }
 
@@ -310,6 +342,10 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
 }
 
 function getProviderCode(provider: string): string {
+  if (!isSafeId(provider)) {
+    return "// Provider code unavailable for invalid provider id"
+  }
+
   const providerDir = join(process.cwd(), "src", "providers", provider)
   const indexPath = join(providerDir, "index.ts")
   const promptPath = join(providerDir, "prompt.ts")
@@ -341,6 +377,10 @@ function getProviderCode(provider: string): string {
 }
 
 function getProviderPrompts(provider: string): Record<string, string> | null {
+  if (!isSafeId(provider)) {
+    return null
+  }
+
   const providerDir = join(process.cwd(), "src", "providers", provider)
   const prompts: Record<string, string> = {}
 

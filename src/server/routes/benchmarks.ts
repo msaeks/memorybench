@@ -4,6 +4,8 @@ import { getAvailableProviders, getProviderInfo } from "../../providers"
 import { getAvailableBenchmarks, createBenchmark } from "../../benchmarks"
 import { MODEL_ALIASES, listModelsByProvider } from "../../utils/models"
 import { getActiveRunsWithBenchmarks } from "../runState"
+import { parseBoundedInt, isSafeId } from "../../utils/security"
+import { logger } from "../../utils/logger"
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -84,6 +86,9 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
   const questionsMatch = pathname.match(/^\/api\/benchmarks\/([^/]+)\/questions$/)
   if (method === "GET" && questionsMatch) {
     const benchmarkName = questionsMatch[1]
+    if (!isSafeId(benchmarkName)) {
+      return json({ error: "Invalid benchmark name" }, 400)
+    }
 
     try {
       const benchmark = createBenchmark(benchmarkName as any)
@@ -91,8 +96,12 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
       const questions = benchmark.getQuestions()
 
       // Support pagination
-      const page = parseInt(url.searchParams.get("page") || "1")
-      const limit = parseInt(url.searchParams.get("limit") || "20")
+      const page = parseBoundedInt(url.searchParams.get("page"), 1, 1, 100000)
+      const limit = parseBoundedInt(url.searchParams.get("limit"), 20, 1, 200)
+      if (page === null || limit === null) {
+        return json({ error: "Invalid pagination parameters" }, 400)
+      }
+
       const type = url.searchParams.get("type")
 
       let filtered = questions
@@ -124,6 +133,7 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
         },
       })
     } catch (e) {
+      logger.warn(`Benchmark questions not found for ${benchmarkName}: ${e}`)
       return json({ error: `Benchmark not found: ${benchmarkName}` }, 404)
     }
   }

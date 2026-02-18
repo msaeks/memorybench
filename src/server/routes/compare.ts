@@ -1,13 +1,15 @@
 import { existsSync, readdirSync } from "fs"
-import { join } from "path"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { batchManager } from "../../orchestrator/batch"
-import type { CompareManifest } from "../../orchestrator/batch"
 import { wsManager } from "../index"
 import { getRunState } from "../runState"
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
 import type { SamplingConfig } from "../../types/checkpoint"
+import { isSafeId } from "../../utils/security"
+import { logger } from "../../utils/logger"
+import { z } from "zod"
+import { HttpBodyError, readJsonBody } from "../../utils/http"
 
 const checkpointManager = new CheckpointManager()
 
@@ -22,12 +24,62 @@ export type CompareState = {
 }
 
 const activeCompares = new Map<string, CompareState>()
+const identifierSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .refine((value) => isSafeId(value), { message: "Must contain only letters, numbers, _ or -" })
+
+const samplingSchema = z
+  .object({
+    mode: z.enum(["full", "sample", "limit"]),
+    sampleType: z.enum(["consecutive", "random"]).optional(),
+    perCategory: z.number().int().min(1).max(1000).optional(),
+    limit: z.number().int().min(1).max(5000).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === "sample" && value.perCategory === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "sampling.perCategory is required when mode=sample",
+      })
+    }
+    if (value.mode === "limit" && value.limit === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "sampling.limit is required when mode=limit",
+      })
+    }
+  })
+
+const compareStartRequestSchema = z
+  .object({
+    providers: z.array(identifierSchema).min(1).max(25),
+    benchmark: identifierSchema,
+    judgeModel: z.string().min(1).max(120),
+    answeringModel: z.string().min(1).max(120),
+    sampling: samplingSchema.optional(),
+    force: z.boolean().optional(),
+  })
+  .strict()
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json" },
   })
+}
+
+function decodeAndValidateId(rawValue: string, fieldName: string): string | null {
+  try {
+    const value = decodeURIComponent(rawValue)
+    if (!isSafeId(value)) return null
+    return value
+  } catch {
+    logger.warn(`Rejected malformed ${fieldName} path value`)
+    return null
+  }
 }
 
 function shouldStop(compareId: string): boolean {
@@ -76,6 +128,7 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
     const compareIds = readdirSync(COMPARE_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
+      .filter((id) => isSafeId(id))
       .sort()
 
     const compareDetails = compareIds
@@ -145,18 +198,11 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
   // POST /api/compare/start - Start new comparison
   if (method === "POST" && pathname === "/api/compare/start") {
     try {
-      const body = await req.json()
-      const { providers, benchmark, judgeModel, answeringModel, sampling, force } = body
-
-      if (!providers || !Array.isArray(providers) || providers.length === 0) {
-        return json({ error: "Missing or invalid providers array" }, 400)
+      const parsed = compareStartRequestSchema.safeParse(await readJsonBody(req))
+      if (!parsed.success) {
+        return json({ error: "Invalid request body" }, 400)
       }
-      if (!benchmark || !judgeModel || !answeringModel) {
-        return json(
-          { error: "Missing required fields: benchmark, judgeModel, answeringModel" },
-          400
-        )
-      }
+      const { providers, benchmark, judgeModel, answeringModel, sampling, force } = parsed.data
 
       // Initialize comparison and wait for manifest + checkpoints to be created
       const { compareId } = await initializeComparison({
@@ -170,14 +216,21 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
 
       return json({ message: "Comparison started", compareId })
     } catch (e) {
-      return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
+      if (e instanceof HttpBodyError) {
+        return json({ error: e.message }, e.status)
+      }
+
+      logger.error(`Failed to parse /api/compare/start request: ${e}`)
+      return json({ error: "Invalid request body" }, 400)
     }
   }
 
   // GET /api/compare/:compareId - Get comparison detail with run progress
   const compareIdMatch = pathname.match(/^\/api\/compare\/([^/]+)$/)
   if (method === "GET" && compareIdMatch) {
-    const compareId = decodeURIComponent(compareIdMatch[1])
+    const compareId = decodeAndValidateId(compareIdMatch[1], "compareId")
+    if (!compareId) return json({ error: "Invalid compareId" }, 400)
+
     const manifest = batchManager.loadManifest(compareId)
     if (!manifest) {
       return json({ error: "Comparison not found" }, 404)
@@ -248,7 +301,9 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
   // GET /api/compare/:compareId/report - Get aggregated reports
   const reportMatch = pathname.match(/^\/api\/compare\/([^/]+)\/report$/)
   if (method === "GET" && reportMatch) {
-    const compareId = decodeURIComponent(reportMatch[1])
+    const compareId = decodeAndValidateId(reportMatch[1], "compareId")
+    if (!compareId) return json({ error: "Invalid compareId" }, 400)
+
     const manifest = batchManager.loadManifest(compareId)
     if (!manifest) {
       return json({ error: "Comparison not found" }, 404)
@@ -275,7 +330,9 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
   // POST /api/compare/:compareId/stop - Stop all runs in comparison
   const stopMatch = pathname.match(/^\/api\/compare\/([^/]+)\/stop$/)
   if (method === "POST" && stopMatch) {
-    const compareId = decodeURIComponent(stopMatch[1])
+    const compareId = decodeAndValidateId(stopMatch[1], "compareId")
+    if (!compareId) return json({ error: "Invalid compareId" }, 400)
+
     if (!isCompareActive(compareId)) {
       return json({ error: "Comparison is not active" }, 404)
     }
@@ -297,7 +354,8 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
   // POST /api/compare/:compareId/resume - Resume comparison
   const resumeMatch = pathname.match(/^\/api\/compare\/([^/]+)\/resume$/)
   if (method === "POST" && resumeMatch) {
-    const compareId = decodeURIComponent(resumeMatch[1])
+    const compareId = decodeAndValidateId(resumeMatch[1], "compareId")
+    if (!compareId) return json({ error: "Invalid compareId" }, 400)
 
     if (isCompareActive(compareId)) {
       return json({ error: "Comparison is already active" }, 409)
@@ -317,7 +375,8 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
   // DELETE /api/compare/:compareId - Delete comparison
   const deleteMatch = pathname.match(/^\/api\/compare\/([^/]+)$/)
   if (method === "DELETE" && deleteMatch) {
-    const compareId = decodeURIComponent(deleteMatch[1])
+    const compareId = decodeAndValidateId(deleteMatch[1], "compareId")
+    if (!compareId) return json({ error: "Invalid compareId" }, 400)
 
     if (isCompareActive(compareId)) {
       return json({ error: "Cannot delete active comparison" }, 409)
@@ -416,10 +475,11 @@ async function initializeComparison(options: {
       })
     })
     .catch((error) => {
+      logger.error(`Comparison ${compareId} failed: ${error}`)
       wsManager.broadcast({
         type: "error",
         compareId,
-        message: error instanceof Error ? error.message : "Unknown error",
+        message: "Comparison failed",
       })
     })
     .finally(() => {
@@ -454,11 +514,11 @@ async function resumeComparison(compareId: string) {
       compareId,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error"
+    logger.error(`Comparison resume failed for ${compareId}: ${error}`)
     wsManager.broadcast({
       type: "error",
       compareId,
-      message,
+      message: "Comparison resume failed",
     })
   } finally {
     endCompare(compareId)
