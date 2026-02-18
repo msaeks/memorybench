@@ -33,9 +33,10 @@ Examples:
   bun run src/index.ts run -p supermemory -b locomo -j gpt-4o -r run1
   bun run src/index.ts run -p supermemory -b locomo -j gpt-4o -r run1 -m sonnet-4.5
   bun run src/index.ts run -p mem0 -b longmemeval -j gemini-2.5-flash -r run2 -m opus-4.5
+  bun run src/index.ts run -p hindsight -b locomo -j gpt-4o -r run-hindsight
   bun run src/index.ts run -p filesystem -b locomo -j gpt-4o -r run-fs
   bun run src/index.ts run -p rag -b locomo -j gpt-4o -r run-rag
-  bun run src/index.ts compare -p supermemory,filesystem,rag -b locomo -j gpt-4o -r compare1
+  bun run src/index.ts compare -p supermemory,hindsight,filesystem -b locomo -j gpt-4o -r compare1
 
 Options:
   -p, --provider         Memory provider (see 'help providers')
@@ -69,6 +70,10 @@ Available providers for storing and retrieving memories:
   zep            Zep - Long-term memory for AI assistants
                  Requires: ZEP_API_KEY
 
+  hindsight      Hindsight - Local-first memory server
+                 Requires: HINDSIGHT_BASE_URL (default: http://127.0.0.1:8888)
+                 Optional: HINDSIGHT_API_KEY
+
   filesystem     File-based memory (Claude MEMORY.md / CLAUDE.md style)
                  Extracts structured memories via LLM, stores as Markdown files, text-based search.
                  Requires: OPENAI_API_KEY (for memory extraction via gpt-4o-mini)
@@ -81,6 +86,7 @@ Usage:
   -p supermemory    Use Supermemory as the memory provider
   -p mem0           Use Mem0 as the memory provider
   -p zep            Use Zep as the memory provider
+  -p hindsight      Use local Hindsight as the memory provider
   -p filesystem     Use file-based memory (CLAUDE.md style)
   -p rag            Use hybrid RAG memory (OpenClaw/QMD style)
 `)

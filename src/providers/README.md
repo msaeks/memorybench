@@ -55,3 +55,4 @@ Example: See `src/providers/zep/prompts.ts`
 | `supermemory` | `supermemory` | Raw JSON sessions |
 | `mem0` | `mem0ai` | v2 API with graph |
 | `zep` | `@getzep/zep-cloud` | Graph-based, custom prompts |
+| `hindsight` | `fetch` | Local-first Hindsight HTTP API |

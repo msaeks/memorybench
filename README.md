@@ -48,6 +48,8 @@ bun run src/index.ts run -p supermemory -b locomo
 SUPERMEMORY_API_KEY=
 MEM0_API_KEY=
 ZEP_API_KEY=
+HINDSIGHT_BASE_URL=http://127.0.0.1:8888
+HINDSIGHT_API_KEY=
 
 # Judges (at least one)
 OPENAI_API_KEY=
@@ -73,7 +75,7 @@ GOOGLE_API_KEY=
 ## Options
 
 ```
--p, --provider         Memory provider (supermemory, mem0, zep)
+-p, --provider         Memory provider (supermemory, mem0, zep, hindsight, filesystem, rag)
 -b, --benchmark        Benchmark (locomo, longmemeval, convomem)
 -j, --judge            Judge model (gpt-4o, sonnet-4, gemini-2.5-flash, etc.)
 -r, --run-id           Run identifier (auto-generated if omitted)
@@ -101,8 +103,11 @@ bun run src/index.ts run -p supermemory -b locomo -l 10
 # Different models
 bun run src/index.ts run -p zep -b longmemeval -j sonnet-4 -m gemini-2.5-flash
 
+# Local Hindsight provider
+bun run src/index.ts run -p hindsight -b locomo -j gpt-4o -r hs-local
+
 # Compare multiple providers
-bun run src/index.ts compare -p supermemory,mem0,zep -b locomo -s 5
+bun run src/index.ts compare -p supermemory,hindsight,rag -b locomo -s 5
 
 # Test single question
 bun run src/index.ts test -r my-test -q question_42

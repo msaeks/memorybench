@@ -3,6 +3,8 @@ export interface Config {
   supermemoryBaseUrl: string
   mem0ApiKey: string
   zepApiKey: string
+  hindsightApiKey: string
+  hindsightBaseUrl: string
   openaiApiKey: string
   anthropicApiKey: string
   googleApiKey: string
@@ -13,6 +15,8 @@ export const config: Config = {
   supermemoryBaseUrl: process.env.SUPERMEMORY_BASE_URL || "https://api.supermemory.ai",
   mem0ApiKey: process.env.MEM0_API_KEY || "",
   zepApiKey: process.env.ZEP_API_KEY || "",
+  hindsightApiKey: process.env.HINDSIGHT_API_KEY || "",
+  hindsightBaseUrl: process.env.HINDSIGHT_BASE_URL || "http://127.0.0.1:8888",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
   googleApiKey: process.env.GOOGLE_API_KEY || "",
@@ -26,6 +30,8 @@ export function getProviderConfig(provider: string): { apiKey: string; baseUrl?:
       return { apiKey: config.mem0ApiKey }
     case "zep":
       return { apiKey: config.zepApiKey }
+    case "hindsight":
+      return { apiKey: config.hindsightApiKey, baseUrl: config.hindsightBaseUrl }
     case "filesystem":
       return { apiKey: config.openaiApiKey } // Filesystem uses OpenAI for memory extraction
     case "rag":
