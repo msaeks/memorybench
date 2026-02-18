@@ -201,7 +201,7 @@ export function LatencyTable({ latency }: LatencyTableProps) {
 
 export interface RetrievalMetricsProps {
   retrieval?: RetrievalStats | null
-  byQuestionType?: Record<string, { retrieval?: RetrievalStats }> | null
+  byQuestionType?: Record<string, { retrieval?: RetrievalStats; [key: string]: unknown }> | null
 }
 
 export function RetrievalMetrics({ retrieval, byQuestionType }: RetrievalMetricsProps) {

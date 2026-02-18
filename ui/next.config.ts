@@ -1,4 +1,5 @@
 import type { NextConfig } from "next"
+import { join } from "path"
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -9,6 +10,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingRoot: join(process.cwd(), ".."),
   reactStrictMode: true,
   async headers() {
     return [

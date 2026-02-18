@@ -6,26 +6,27 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "bunx eslint@9.39.2 . --max-warnings=0"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
     "drizzle-orm": "^0.45.1",
-    "next": "^15.5.12",
+    "next": "^16.1.6",
     "prism-react-renderer": "^2.4.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "swr": "^2.2.5"
+    "swr": "^2.4.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.19.11",
+    "@types/node": "^25.2.3",
     "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.0.2",
+    "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.24",
-    "drizzle-kit": "^0.31.9",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.2"
+    "eslint-config-next": "^16.1.6",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3"
   }
 }

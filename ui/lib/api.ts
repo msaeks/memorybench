@@ -286,6 +286,15 @@ export interface LeaderboardEntry {
   byQuestionType: Record<string, { total: number; correct: number; accuracy: number }>
   questionTypeRegistry: QuestionTypeRegistry | null
   latencyStats: LatencyByPhase | null
+  retrieval?: {
+    hitAtK: number
+    precisionAtK: number
+    recallAtK: number
+    f1AtK: number
+    mrr: number
+    ndcg: number
+    k: number
+  }
   evaluations: EvaluationResult[]
   providerCode: string
   promptsUsed: Record<string, string> | null
