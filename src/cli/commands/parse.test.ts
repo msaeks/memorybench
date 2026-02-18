@@ -14,10 +14,22 @@ describe("CLI parse helpers", () => {
       "filesystem",
       "-b",
       "locomo",
+      "-j",
+      "sonnet-4",
+      "-m",
+      "gpt-5",
+      "-l",
+      "11",
       "--concurrency",
       "5",
+      "--concurrency-ingest",
+      "7",
+      "--concurrency-indexing",
+      "8",
       "--concurrency-search",
       "9",
+      "--concurrency-evaluate",
+      "4",
       "--sample",
       "3",
       "--sample-type",
@@ -27,8 +39,11 @@ describe("CLI parse helpers", () => {
     expect(parsed).not.toBeNull()
     expect(parsed!.provider).toBe("filesystem")
     expect(parsed!.benchmark).toBe("locomo")
+    expect(parsed!.judgeModel).toBe("sonnet-4")
+    expect(parsed!.answeringModel).toBe("gpt-5")
+    expect(parsed!.limit).toBe(11)
     expect(parsed!.runId).toMatch(/^run-\d{8}-\d{6}$/)
-    expect(parsed!.concurrency).toEqual({ default: 5, search: 9 })
+    expect(parsed!.concurrency).toEqual({ default: 5, ingest: 7, indexing: 8, search: 9, evaluate: 4 })
     expect(parsed!.sample).toBe(3)
     expect(parsed!.sampleType).toBe("random")
     expect(parsed!.force).toBe(true)
@@ -97,6 +112,11 @@ describe("CLI parse helpers", () => {
     expect(parseListQuestionsArgs([])).toBeNull()
 
     expect(parseSearchArgs(["-r", "run-2"])).toEqual({ runId: "run-2" })
+    expect(parseSearchArgs(["-r", "run-2", "-p", "filesystem", "-b", "locomo"])).toEqual({
+      runId: "run-2",
+      provider: "filesystem",
+      benchmark: "locomo",
+    })
     expect(parseSearchArgs(["-p", "filesystem"])).toBeNull()
 
     expect(parseStatusArgs(["-r", "run-3"])).toEqual({ runId: "run-3" })
@@ -115,4 +135,3 @@ describe("CLI parse helpers", () => {
     expect(parseTestArgs(["-r", "run-4"])).toBeNull()
   })
 })
-

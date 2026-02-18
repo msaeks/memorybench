@@ -18,6 +18,7 @@ describe("security utils", () => {
     const resolved = resolveSafeSubpath("/tmp/base", "abc-1", "runId")
     expect(resolved.endsWith("/tmp/base/abc-1")).toBe(true)
     expect(() => resolveSafeSubpath("/tmp/base", "../outside", "runId")).toThrow("Invalid runId")
+    expect(() => resolveSafeSubpath("/", "abc-1", "runId")).toThrow("Invalid runId")
   })
 
   it("parseBoundedInt applies fallback and bounds checks", () => {

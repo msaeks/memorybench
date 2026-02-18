@@ -30,7 +30,11 @@ const EMBEDDING_MODEL = "text-embedding-3-small"
  * Split text into overlapping chunks, attempting to break on sentence boundaries.
  * Follows the chunking approach from OpenClaw/QMD: ~400 tokens with overlap.
  */
-function chunkText(text: string, chunkSize: number = CHUNK_SIZE, overlap: number = CHUNK_OVERLAP): string[] {
+export function chunkText(
+  text: string,
+  chunkSize: number = CHUNK_SIZE,
+  overlap: number = CHUNK_OVERLAP
+): string[] {
   if (text.length <= chunkSize) {
     return [text.trim()]
   }
@@ -54,12 +58,14 @@ function chunkText(text: string, chunkSize: number = CHUNK_SIZE, overlap: number
     if (breakPoint <= start || breakPoint < start + chunkSize * 0.5) {
       breakPoint = text.lastIndexOf(" ", end)
     }
-    if (breakPoint <= start) {
+    if (breakPoint <= start || breakPoint < start + chunkSize * 0.5) {
       breakPoint = end
     }
 
     chunks.push(text.slice(start, breakPoint + 1).trim())
-    start = breakPoint + 1 - overlap
+    // Guarantee forward progress even when overlap is large and no good breakpoints exist.
+    const nextStart = breakPoint + 1 - overlap
+    start = nextStart > start ? nextStart : Math.max(start + 1, end - overlap)
 
     if (start < 0) start = 0
   }
